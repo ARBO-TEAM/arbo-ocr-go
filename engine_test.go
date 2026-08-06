@@ -211,6 +211,45 @@ func TestRecognizeDoesNotDeadlockOnLargeStderr(t *testing.T) {
 	}
 }
 
+func TestBoolFlagsUseSingleTokenForm(t *testing.T) {
+	// Regression test: cxxopts binds a bool flag's value only via "=".
+	// "--angle" "false" as two argv tokens leaves --angle implicitly true
+	// (confirmed against the real arboocr_demo binary) — flagsFromConfig
+	// must never emit that shape.
+	eng := &Engine{cfg: Config{
+		UseAngleCls: false,
+		UseCuda:     true,
+		UseTensorrt: false,
+		UseFp16:     false,
+		UseClahe:    true,
+	}}
+	flags := eng.flagsFromConfig()
+
+	want := map[string]bool{
+		"--angle=false":    false,
+		"--cuda=true":      false,
+		"--tensorrt=false": false,
+		"--fp16=false":     false,
+		"--clahe=true":     false,
+	}
+	for _, f := range flags {
+		if strings.HasPrefix(f, "--angle") || strings.HasPrefix(f, "--cuda") ||
+			strings.HasPrefix(f, "--tensorrt") || strings.HasPrefix(f, "--fp16") ||
+			strings.HasPrefix(f, "--clahe") {
+			if !strings.Contains(f, "=") {
+				t.Errorf("bool flag %q must use --flag=value form, not a bare flag", f)
+			}
+			if _, ok := want[f]; !ok {
+				t.Errorf("unexpected flag %q", f)
+			}
+			delete(want, f)
+		}
+	}
+	for missing := range want {
+		t.Errorf("missing expected flag %q", missing)
+	}
+}
+
 func TestConfigFlagsReachSubprocess(t *testing.T) {
 	// Indirect check, mirroring EngineTest.php's
 	// testFlagsFromOptionsMapToCliFlags: the fake process only reads

@@ -150,7 +150,11 @@ func (e *Engine) flagsFromConfig() []string {
 		{e.cfg.UseClahe, "clahe"},
 	}
 	for _, bf := range boolFlags {
-		flags = append(flags, "--"+bf.flag, boolToString(bf.value))
+		// cxxopts only binds a bool flag's value via "=" — "--angle" "false"
+		// as two argv tokens leaves --angle implicitly true (bare flag) and
+		// "false" as an ignored stray positional. Single-token form is the
+		// only form that actually works.
+		flags = append(flags, "--"+bf.flag+"="+boolToString(bf.value))
 	}
 
 	return flags
