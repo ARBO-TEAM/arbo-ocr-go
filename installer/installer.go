@@ -22,11 +22,15 @@ import (
 // binaries as release assets.
 const repo = "wafik/ArboOCR"
 
-// pinnedVersion is the release tag this package downloads. It's the same
-// tag the PHP package (arbo-ocr-php) pins via its composer.json
-// extra.arboocr-version — the release binary itself is language-agnostic,
-// so both packages track the same build.
-const pinnedVersion = "v0.1.0-php1"
+// pinnedVersion is the release tag this package downloads. The release
+// binary is language-agnostic, so every arboOCR wrapper (Go, PHP, Python,
+// Rust) tracks the same tag — the PHP package pins it via composer.json's
+// extra.arboocr-version, this package via this constant. Keep them in step
+// when bumping.
+//
+// Bumping this constant also changes the cache directory (see
+// EnsureInstalled) — that is deliberate, not incidental.
+const pinnedVersion = "v0.2.0"
 
 // downloadTimeout bounds how long EnsureInstalled waits for the release
 // asset to download.
@@ -51,8 +55,13 @@ func DetectPlatform() (platform string, ok bool) {
 // EnsureInstalled makes sure the arboocr_demo binary exists locally,
 // downloading it from GitHub Releases if missing, and returns its
 // absolute path. binDir == "" means: use the default cache directory,
-// filepath.Join(os.UserCacheDir(), "arbo-ocr-go", platform). Returns an
-// error if the platform is unsupported or the download/extract fails.
+// filepath.Join(os.UserCacheDir(), "arbo-ocr-go", pinnedVersion, platform).
+// Returns an error if the platform is unsupported or the download/extract
+// fails.
+//
+// Callers passing an explicit binDir own its lifecycle: it is used as-is,
+// so if you cache per-machine across upgrades, include pinnedVersion in the
+// path yourself for the same reason the default layout does (below).
 func EnsureInstalled(binDir string) (string, error) {
 	platform, ok := DetectPlatform()
 	if !ok {
@@ -68,11 +77,21 @@ func EnsureInstalled(binDir string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("arboocr: could not determine user cache directory: %w", err)
 		}
-		binDir = filepath.Join(cacheDir, "arbo-ocr-go", platform)
+		// pinnedVersion is a path segment on purpose — do NOT "tidy" it out.
+		// The extracted binary is named arboocr_demo[.exe] in every release,
+		// so a version-less cache path is the same path for every version,
+		// and the os.Stat short-circuit below then reports a v0.1.0-php1
+		// binary as "already installed" forever. Bumping pinnedVersion would
+		// be a silent no-op for every user who ever ran an older pin: they
+		// keep the stale binary and never see the new release. Versioning the
+		// directory makes a bump a cache miss, which is the whole point.
+		binDir = filepath.Join(cacheDir, "arbo-ocr-go", pinnedVersion, platform)
 	}
 
 	binPath := filepath.Join(binDir, binaryName(platform))
 
+	// Safe precisely because binDir is version-scoped: a hit here means a
+	// binary from *this* pinnedVersion, not merely some arboocr_demo.
 	if _, err := os.Stat(binPath); err == nil {
 		return binPath, nil // already installed
 	}

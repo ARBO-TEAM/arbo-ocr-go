@@ -11,7 +11,7 @@ go get github.com/ARBO-TEAM/arbo-ocr-go
 
 `NewEngine` downloads the matching arboOCR release binary (Windows or Linux,
 auto-detected) the first time it's used — see "How it works" below. As of
-[`v0.1.0-php1`](https://github.com/wafik/ArboOCR/releases/tag/v0.1.0-php1)
+[`v0.2.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.2.0)
 (published), this auto-download is live and verified working end to end —
 no manual binary step needed. If it fails anyway (offline, unsupported OS),
 download a release manually from the
@@ -139,9 +139,16 @@ instead: `NewEngine` only triggers a download (via the `installer` package —
 kept separate from the root package so "how to get the binary" stays
 independent of "how to run it") when `Config.BinPath` is left empty, caching
 the result under the OS user cache directory
-(`os.UserCacheDir()/arbo-ocr-go/<platform>/`) rather than anywhere inside the
-module itself — Go's module cache is often read-only, so it can't be written
-into the way Composer's `vendor/` can. `installer.DetectPlatform` reports
+(`os.UserCacheDir()/arbo-ocr-go/<arboocr-version>/<platform>/`) rather than
+anywhere inside the module itself — Go's module cache is often read-only, so
+it can't be written into the way Composer's `vendor/` can. The arboOCR
+release tag is part of that path deliberately: the extracted binary is named
+`arboocr_demo` in every release, so a version-less cache directory would make
+every version collide on one path, and the installer's "already installed"
+check would then pin users to whatever binary they downloaded first. With the
+version in the path, bumping the pinned tag is a cache miss and the new
+binary is actually fetched. Old version directories are left in place rather
+than deleted. `installer.DetectPlatform` reports
 which release asset matches the current OS/arch; call
 `installer.EnsureInstalled(binDir)` yourself (e.g. in a Docker build step) if
 you want to control exactly when the download happens, then pass the
