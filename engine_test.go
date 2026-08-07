@@ -1,6 +1,7 @@
 package arboocr
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -277,5 +278,81 @@ func TestConfigFlagsReachSubprocess(t *testing.T) {
 	}
 	if result.Backend != "cpu" {
 		t.Errorf("Backend = %q, want %q", result.Backend, "cpu")
+	}
+}
+
+func TestZeroValueTuningFlagsAreOmitted(t *testing.T) {
+	// arboocr_demo defaults min-confidence to 0.5, rec-batch-num to 6 and
+	// det-limit-side-len to 960. Emitting the Go zero value would override
+	// each of those for callers who never set the field, so an unset field
+	// must produce no flag at all. --word-boxes and --log-level are likewise
+	// opt-in only.
+	eng := &Engine{cfg: Config{}}
+	joined := strings.Join(eng.flagsFromConfig(), " ")
+
+	for _, flag := range []string{
+		"--min-confidence", "--rec-batch-num", "--det-limit-side-len",
+		"--word-boxes", "--log-level",
+	} {
+		if strings.Contains(joined, flag) {
+			t.Errorf("zero-value Config emitted %s (flags: %s)", flag, joined)
+		}
+	}
+}
+
+func TestTuningFlagsEmittedWhenSet(t *testing.T) {
+	eng := &Engine{cfg: Config{
+		MinConfidence:   0.75,
+		RecBatchNum:     12,
+		DetLimitSideLen: 1280,
+		LogLevel:        "warn",
+		WordBoxes:       true,
+	}}
+	flags := eng.flagsFromConfig()
+	joined := strings.Join(flags, " ")
+
+	for _, want := range []string{
+		"--min-confidence 0.75",
+		"--rec-batch-num 12",
+		"--det-limit-side-len 1280",
+		"--log-level warn",
+		"--word-boxes=true",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("flags missing %q (got: %s)", want, joined)
+		}
+	}
+}
+
+func TestWordBoxesParseIntoLineResult(t *testing.T) {
+	// --word-boxes makes arboOCR add a "words" array per line; without it the
+	// key is absent entirely and Words must stay nil.
+	const withWords = `{"backend":"cpu","image":"a.png","elapsedMs":1,"lines":` +
+		`[{"text":"hi there","score":0.9,"detScore":0.8,"polygon":[{"x":1,"y":2}],` +
+		`"words":[{"text":"hi","score":0.91,"polygon":[{"x":1,"y":2}]},` +
+		`{"text":"there","score":0.89,"polygon":[{"x":3,"y":4}]}]}]}`
+
+	var got PageResult
+	if err := json.Unmarshal([]byte(withWords), &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Lines) != 1 || len(got.Lines[0].Words) != 2 {
+		t.Fatalf("Words = %+v, want 2 entries", got.Lines)
+	}
+	if got.Lines[0].Words[1].Text != "there" || got.Lines[0].Words[1].Score != 0.89 {
+		t.Errorf("Words[1] = %+v, want {there 0.89 ...}", got.Lines[0].Words[1])
+	}
+	if len(got.Lines[0].Words[0].Polygon) != 1 || got.Lines[0].Words[0].Polygon[0].X != 1 {
+		t.Errorf("Words[0].Polygon = %+v, want one point at x=1", got.Lines[0].Words[0].Polygon)
+	}
+
+	const withoutWords = `{"backend":"cpu","image":"a.png","elapsedMs":1,"lines":` +
+		`[{"text":"hi","score":0.9,"detScore":0.8,"polygon":[{"x":1,"y":2}]}]}`
+	var bare PageResult
+	if err := json.Unmarshal([]byte(withoutWords), &bare); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if bare.Lines[0].Words != nil {
+		t.Errorf("Words = %+v, want nil when --word-boxes was not passed", bare.Lines[0].Words)
 	}
 }

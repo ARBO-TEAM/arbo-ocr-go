@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/ARBO-TEAM/arbo-ocr-go/installer"
@@ -27,6 +28,22 @@ type Config struct {
 	ClsModelPath string
 	RecModelPath string
 	DictPath     string
+
+	// Accuracy/throughput knobs added in arboOCR v0.2.0. Each has a CLI-side
+	// default, so the zero value means "don't pass the flag, use the binary's
+	// default" — never "pass 0".
+	MinConfidence   float64 // drop lines below this recognition confidence; CLI default 0.5
+	RecBatchNum     int     // crops per recognition inference call; CLI default 6
+	DetLimitSideLen int     // longest image side for detection resize; CLI default 960
+
+	// LogLevel opts arboocr_demo into stderr logging: debug|info|warn|error.
+	// Empty (the default) leaves it silent, which is v0.2.0's behaviour.
+	LogLevel string
+
+	// WordBoxes requests a polygon per word (per character for CJK),
+	// surfaced as LineResult.Words. Off by default: it makes the JSON
+	// noticeably larger and most callers only want line text.
+	WordBoxes bool
 }
 
 // Engine runs the prebuilt arboocr_demo binary via os/exec and parses its
@@ -115,9 +132,12 @@ func (e *Engine) Recognize(imagePath string) (*PageResult, error) {
 }
 
 // flagsFromConfig mirrors Engine.php's flagsFromOptions(): string fields
-// emit "--flag-name", "<value>" only when non-empty; the five bool fields
-// always emit "--flag-name", "true"/"false" since Config has no way to
-// represent "unset" for a bool.
+// emit "--flag-name", "<value>" only when non-empty, and numeric fields
+// only when non-zero, so an unset field leaves arboocr_demo's own default
+// in place. The five original bool fields always emit
+// "--flag-name", "true"/"false" since Config has no way to represent
+// "unset" for a bool, and their CLI defaults are known-stable; WordBoxes is
+// the exception and emits only when true (see below).
 func (e *Engine) flagsFromConfig() []string {
 	var flags []string
 
@@ -132,11 +152,35 @@ func (e *Engine) flagsFromConfig() []string {
 		{e.cfg.ClsModelPath, "cls-model"},
 		{e.cfg.RecModelPath, "rec-model"},
 		{e.cfg.DictPath, "dict"},
+		{e.cfg.LogLevel, "log-level"},
 	}
 	for _, sf := range stringFlags {
 		if sf.value != "" {
 			flags = append(flags, "--"+sf.flag, sf.value)
 		}
+	}
+
+	// Numeric flags follow the string rule, not the bool rule: arboocr_demo
+	// gives each a non-zero default (min-confidence 0.5, rec-batch-num 6,
+	// det-limit-side-len 960), so emitting the Go zero value would silently
+	// override the binary's default for every caller who never set the field.
+	// Only a non-zero value is an actual opt-in.
+	if e.cfg.MinConfidence != 0 {
+		flags = append(flags, "--min-confidence", strconv.FormatFloat(e.cfg.MinConfidence, 'g', -1, 64))
+	}
+	if e.cfg.RecBatchNum != 0 {
+		flags = append(flags, "--rec-batch-num", strconv.Itoa(e.cfg.RecBatchNum))
+	}
+	if e.cfg.DetLimitSideLen != 0 {
+		flags = append(flags, "--det-limit-side-len", strconv.Itoa(e.cfg.DetLimitSideLen))
+	}
+
+	// --word-boxes is emitted only when true, unlike the always-emitted bool
+	// flags below: it is new in arboOCR v0.2.0, and unconditionally passing
+	// "--word-boxes=false" would make an explicitly-set Config.BinPath
+	// pointing at an older binary fail on an unknown option.
+	if e.cfg.WordBoxes {
+		flags = append(flags, "--word-boxes=true")
 	}
 
 	boolFlags := []struct {
