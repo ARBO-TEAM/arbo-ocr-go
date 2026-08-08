@@ -18,15 +18,19 @@ download a release manually from the
 [arboOCR releases page](https://github.com/wafik/ArboOCR/releases) and pass
 `Config.BinPath` explicitly.
 
-You also need the OCR models — arboOCR does not bundle them. See
-[Models](#models) below for exactly which files each `ModelType` needs and
-where to get them.
+You also need the OCR models — arboOCR does not bundle them, and the release
+binary this package currently pins does not fetch them either. See
+[Models](#models) below for exactly which files each `ModelType` needs, where
+to get them, and the auto-download options that land with the next arboOCR
+release.
 
 ## Models
 
-arboOCR doesn't bundle OCR models — you point `Config.ModelsDir` at a folder
-of PP-OCRv6 ONNX files. Only the recognizer has size variants; the detector
-is always one file regardless of `ModelType`:
+arboOCR doesn't bundle OCR models. With the pinned release binary you point
+`Config.ModelsDir` at a folder of PP-OCRv6 ONNX files and a missing file is an
+error — see [Automatic download](#automatic-download-needs-the-next-arboocr-release)
+below for what changes with the next arboOCR release. Only the recognizer has
+size variants; the detector is always one file regardless of `ModelType`:
 
 | File | Needed for | Varies by `ModelType`? |
 |---|---|---|
@@ -51,6 +55,94 @@ whichever applies:
 - A local arboOCR checkout's `models/` directory already has the detector,
   classifier, and all three recognizer sizes — handy for local dev (see the
   tiny-model example below).
+
+### Automatic download (needs the next arboOCR release)
+
+> **Not live yet — read before wiring this in.** `installer.EnsureInstalled`
+> pins arboOCR
+> [`v0.2.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.2.0), which
+> predates model auto-download. Install this package today and models are
+> still entirely your job: `ModelsDir` is required and a missing file is an
+> error. The `Config` fields and `Engine.EnsureModels` below exist and are
+> wired up, but they only do anything against a newer binary you supply
+> yourself via `Config.BinPath`. When the arboOCR release carrying the feature
+> ships, the pinned tag bumps and this starts working out of the box with no
+> code change on your side.
+
+The next arboOCR release teaches the binary to fetch missing models itself and
+verify them by SHA-256, which makes `ModelsDir` optional. Its precedence, per
+file:
+
+1. An explicit model path (`DetModelPath`, `ClsModelPath`, `RecModelPath`,
+   `DictPath`) is used exactly as given and is never substituted by a
+   download.
+2. Otherwise a file already sitting in `ModelsDir` wins — zero network.
+3. Only then is the file downloaded into the model cache and verified.
+
+Two `Config` fields drive it. Both are opt-in, and that matters: left at their
+zero value they emit no CLI flag at all, which is what keeps this package
+working against the pinned v0.2.0 binary (an unknown option makes it exit 1
+with a usage error).
+
+| Field | CLI flag | Meaning |
+|---|---|---|
+| `NoDownload bool` | `--no-download` | Never fetch a missing model — fail instead. For runs that must not silently reach the network. |
+| `ModelsURL string` | `--models-url <url>` | Directory URL to fetch missing models from, e.g. an internal mirror, instead of the default upstream location. |
+
+`Engine.EnsureModels()` prefetches the models for the configured
+`OcrVersion`/`ModelType` so the first `Recognize` doesn't pay for the
+download — useful in a Docker build step or at process startup:
+
+```go
+engine, err := arboocr.NewEngine(arboocr.Config{
+	BinPath:   "/path/to/newer/arboocr_demo", // until the pinned tag is bumped
+	ModelType: "small",
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+if err := engine.EnsureModels(); err != nil {
+	log.Fatal(err)
+}
+```
+
+It runs `arboocr_demo --download-models`, which downloads and exits without
+doing any OCR. Deliberately the same shape as `installer.EnsureInstalled` is
+for the binary: one blocking call, no progress reporting, idempotent — an
+already-cached model is a no-op. Against the pinned v0.2.0 binary it returns
+an `*arboocr.OcrError` carrying the binary's usage error, since the flag
+doesn't exist there yet.
+
+### Environment variables
+
+`Recognize` and `EnsureModels` run `arboocr_demo` as a child process, so it
+inherits the parent's environment. These need no `Config` field — and, like
+the fields above, need the arboOCR release that adds auto-download:
+
+| Variable | Effect |
+|---|---|
+| `ARBOOCR_OFFLINE=1` | Never download a missing model — the environment form of `Config.NoDownload`. |
+| `ARBOOCR_CACHE_DIR` | Override the model cache directory (below). |
+| `ARBOOCR_MODELS_URL` | Directory URL to fetch missing models from — the environment form of `Config.ModelsURL`. |
+
+### Model cache directory
+
+Downloaded models land in a tag-scoped cache directory, so a future change to
+the model set is a cache miss rather than a silent stale hit — the same
+reasoning behind this package's versioned *binary* cache path (see
+[How it works](#how-it-works)):
+
+| OS | Path |
+|---|---|
+| Windows | `%LOCALAPPDATA%\arboOCR\models\models-v1` |
+| macOS | `~/Library/Caches/arboOCR/models/models-v1` |
+| Linux | `$XDG_CACHE_HOME/arboOCR/models/models-v1`, or `~/.cache/arboOCR/models/models-v1` when `XDG_CACHE_HOME` is unset |
+
+That is arboOCR's own model cache, separate from this package's binary cache
+under `os.UserCacheDir()/arbo-ocr-go/<arboocr-version>/<platform>/`. The macOS
+row applies only to a binary you supply yourself: `installer.DetectPlatform`
+covers Windows and Linux x64 only, matching the published release assets.
 
 ## Usage
 
@@ -154,8 +246,12 @@ which release asset matches the current OS/arch; call
 you want to control exactly when the download happens, then pass the
 returned path as `Config.BinPath`.
 
-Like the PHP package, OCR models are never bundled or auto-downloaded — see
-[Models](#models) above for exactly which files you need.
+Like the PHP package, OCR models are never bundled in the release archive, and
+the pinned `v0.2.0` binary doesn't fetch them either — supply them yourself via
+`Config.ModelsDir`. The next arboOCR release adds model auto-download to the
+binary; `Config.NoDownload`, `Config.ModelsURL` and `Engine.EnsureModels` are
+already wired up to drive it, and start working once the pinned tag is bumped.
+See [Models](#models) above for exactly which files you need either way.
 
 `Recognize` captures the subprocess's output with buffered `exec.Cmd.Run()`
 (`cmd.Stdout`/`cmd.Stderr` set to plain `io.Writer` values, which Go's stdlib

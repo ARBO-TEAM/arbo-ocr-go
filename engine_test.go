@@ -38,6 +38,23 @@ func TestMain(m *testing.M) {
 // imagePath into argv verbatim, giving a clean way to select fake scenarios
 // without needing any extra flags Recognize doesn't otherwise expose.
 func runFakeArboocrDemo() {
+	// --download-models has no --image to dispatch on: it's a download-and-exit
+	// mode, so it gets its own branch ahead of the image switch. Recording argv
+	// to a file (path handed over by the parent via ARBOOCR_TEST_ARGV_FILE) is
+	// how the test inspects the invocation — stdout is the wrong channel, since
+	// the real binary writes nothing useful there in this mode.
+	if hasArg("--download-models") {
+		if path := os.Getenv("ARBOOCR_TEST_ARGV_FILE"); path != "" {
+			_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
+		}
+		if os.Getenv("ARBOOCR_TEST_DOWNLOAD_FAILS") == "1" {
+			// What a v0.2.0 binary actually does with an unknown option.
+			os.Stderr.WriteString("Option '--download-models' does not exist\n")
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	image := ""
 	for i, a := range os.Args {
 		if a == "--image" && i+1 < len(os.Args) {
@@ -66,6 +83,17 @@ func runFakeArboocrDemo() {
 		os.Stdout.WriteString(cannedJSON)
 		os.Exit(0)
 	}
+}
+
+// hasArg reports whether argv contains name, either bare ("--download-models")
+// or in cxxopts' single-token form ("--download-models=true").
+func hasArg(name string) bool {
+	for _, a := range os.Args {
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRecognizeParsesSuccessfulJSON(t *testing.T) {
@@ -297,6 +325,130 @@ func TestZeroValueTuningFlagsAreOmitted(t *testing.T) {
 		if strings.Contains(joined, flag) {
 			t.Errorf("zero-value Config emitted %s (flags: %s)", flag, joined)
 		}
+	}
+}
+
+func TestZeroValueEmitsNoModelDownloadFlags(t *testing.T) {
+	// The load-bearing one for anybody on the pinned arboOCR release:
+	// --no-download and --models-url postdate v0.2.0, and cxxopts exits 1
+	// with a usage error on an unknown option. A caller who never sets
+	// NoDownload/ModelsURL must therefore produce argv that is byte-for-byte
+	// what it was before those fields existed — not "--no-download=false".
+	eng := &Engine{cfg: Config{}}
+	flags := eng.flagsFromConfig()
+	joined := strings.Join(flags, " ")
+
+	for _, flag := range []string{"--no-download", "--models-url"} {
+		if strings.Contains(joined, flag) {
+			t.Errorf("zero-value Config emitted %s (flags: %s)", flag, joined)
+		}
+	}
+
+	// Pin the whole argv, not just the absence of the two new flags: a future
+	// unconditional append anywhere in flagsFromConfig breaks v0.2.0 users the
+	// same way, and only an exact-match assertion catches that.
+	want := []string{
+		"--angle=false", "--cuda=false", "--tensorrt=false",
+		"--fp16=false", "--clahe=false",
+	}
+	if len(flags) != len(want) {
+		t.Fatalf("zero-value Config produced %d flags, want exactly %d: %v", len(flags), len(want), flags)
+	}
+	for i := range want {
+		if flags[i] != want[i] {
+			t.Errorf("flags[%d] = %q, want %q (full: %v)", i, flags[i], want[i], flags)
+		}
+	}
+}
+
+func TestModelDownloadFlagsEmittedWhenSet(t *testing.T) {
+	eng := &Engine{cfg: Config{
+		NoDownload: true,
+		ModelsURL:  "https://mirror.internal/arboocr/models-v1/",
+	}}
+	joined := strings.Join(eng.flagsFromConfig(), " ")
+
+	for _, want := range []string{
+		// Single-token form for the bool, same as --word-boxes: cxxopts binds
+		// a bool's value only via "=".
+		"--no-download=true",
+		"--models-url https://mirror.internal/arboocr/models-v1/",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("flags missing %q (got: %s)", want, joined)
+		}
+	}
+}
+
+func TestEnsureModelsPassesDownloadModelsFlag(t *testing.T) {
+	// The fake arboocr_demo records its argv when invoked with
+	// --download-models, so this asserts the real subprocess invocation
+	// rather than just the flag builder.
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	argvFile := filepath.Join(t.TempDir(), "argv.txt")
+	t.Setenv("ARBOOCR_TEST_ARGV_FILE", argvFile)
+
+	eng, err := NewEngine(Config{
+		BinPath:    os.Args[0],
+		ModelType:  "small",
+		OcrVersion: "PP-OCRv6",
+		ModelsURL:  "https://mirror.internal/models/",
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	if err := eng.EnsureModels(); err != nil {
+		t.Fatalf("EnsureModels: %v", err)
+	}
+
+	raw, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("reading recorded argv: %v", err)
+	}
+	argv := string(raw)
+
+	for _, want := range []string{
+		"--download-models",
+		"--model-type small",
+		"--ocr-version PP-OCRv6",
+		"--models-url https://mirror.internal/models/",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv missing %q (got: %s)", want, argv)
+		}
+	}
+	if strings.Contains(argv, "--image") {
+		t.Errorf("--download-models invocation must not pass --image (got: %s)", argv)
+	}
+}
+
+func TestEnsureModelsReturnsOcrErrorOnNonZeroExit(t *testing.T) {
+	// A v0.2.0 binary has no --download-models flag and exits non-zero with a
+	// usage error; callers must get a typed *OcrError carrying that stderr,
+	// not a bare exec error.
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	t.Setenv("ARBOOCR_TEST_DOWNLOAD_FAILS", "1")
+
+	eng, err := NewEngine(Config{BinPath: os.Args[0]})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	err = eng.EnsureModels()
+	if err == nil {
+		t.Fatal("EnsureModels: want error, got nil")
+	}
+
+	var ocrErr *OcrError
+	if !errors.As(err, &ocrErr) {
+		t.Fatalf("error type = %T, want *OcrError (err: %v)", err, err)
+	}
+	if ocrErr.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", ocrErr.ExitCode)
+	}
+	if !strings.Contains(ocrErr.Error(), "--download-models") {
+		t.Errorf("Error() = %q, want it to mention --download-models", ocrErr.Error())
 	}
 }
 
