@@ -30,6 +30,16 @@ const repo = "wafik/ArboOCR"
 //
 // Bumping this constant also changes the cache directory (see
 // EnsureInstalled) — that is deliberate, not incidental.
+//
+// TODO: bump this to the next arboOCR release once it ships — the one that
+// adds model auto-download. v0.2.0 predates that feature, so the binary this
+// currently downloads has no --no-download / --models-url / --download-models
+// flags and no ARBOOCR_OFFLINE / ARBOOCR_CACHE_DIR / ARBOOCR_MODELS_URL
+// handling. Config.NoDownload, Config.ModelsURL and Engine.EnsureModels
+// (engine.go) exist already but only do anything against a newer binary
+// supplied via Config.BinPath. Bumping this constant is what makes them work
+// out of the box; the README's Models section says the same and should be
+// re-read at the same time.
 const pinnedVersion = "v0.2.0"
 
 // downloadTimeout bounds how long EnsureInstalled waits for the release

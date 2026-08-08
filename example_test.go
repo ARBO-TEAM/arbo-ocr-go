@@ -34,3 +34,28 @@ func Example() {
 		fmt.Printf("%s (%.3f)\n", line.Text, line.Score)
 	}
 }
+
+// ExampleEngine_EnsureModels shows prefetching models so the first Recognize
+// doesn't pay for the download — e.g. from a Docker build step. Like Example
+// above it's compiled but not executed.
+//
+// This needs the arboOCR release that adds model auto-download; the version
+// installer.EnsureInstalled currently pins predates it, so BinPath has to
+// point at a newer binary until that pin is bumped.
+func ExampleEngine_EnsureModels() {
+	engine, err := arboocr.NewEngine(arboocr.Config{
+		BinPath:   "/path/to/newer/arboocr_demo",
+		ModelType: "small",
+		// NoDownload: true,                              // fail rather than fetch
+		// ModelsURL:  "https://mirror.internal/models/", // fetch from an internal mirror
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Downloads into the model cache and returns; does no OCR. Idempotent —
+	// an already-cached model is a no-op.
+	if err := engine.EnsureModels(); err != nil {
+		log.Fatal(err)
+	}
+}
