@@ -48,7 +48,7 @@ func runFakeArboocrDemo() {
 			_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
 		}
 		if os.Getenv("ARBOOCR_TEST_DOWNLOAD_FAILS") == "1" {
-			// What a v0.2.0 binary actually does with an unknown option.
+			// What a pre-v0.3.0 binary actually does with an unknown option.
 			os.Stderr.WriteString("Option '--download-models' does not exist\n")
 			os.Exit(1)
 		}
@@ -329,11 +329,12 @@ func TestZeroValueTuningFlagsAreOmitted(t *testing.T) {
 }
 
 func TestZeroValueEmitsNoModelDownloadFlags(t *testing.T) {
-	// The load-bearing one for anybody on the pinned arboOCR release:
-	// --no-download and --models-url postdate v0.2.0, and cxxopts exits 1
-	// with a usage error on an unknown option. A caller who never sets
-	// NoDownload/ModelsURL must therefore produce argv that is byte-for-byte
-	// what it was before those fields existed — not "--no-download=false".
+	// The load-bearing one for anybody pointing Config.BinPath at an older
+	// binary: --no-download and --models-url only exist from arboOCR v0.3.0,
+	// and cxxopts exits 1 with a usage error on an unknown option. A caller
+	// who never sets NoDownload/ModelsURL must therefore produce argv that is
+	// byte-for-byte what it was before those fields existed — not
+	// "--no-download=false".
 	eng := &Engine{cfg: Config{}}
 	flags := eng.flagsFromConfig()
 	joined := strings.Join(flags, " ")
@@ -345,8 +346,8 @@ func TestZeroValueEmitsNoModelDownloadFlags(t *testing.T) {
 	}
 
 	// Pin the whole argv, not just the absence of the two new flags: a future
-	// unconditional append anywhere in flagsFromConfig breaks v0.2.0 users the
-	// same way, and only an exact-match assertion catches that.
+	// unconditional append anywhere in flagsFromConfig breaks pre-v0.3.0
+	// binaries the same way, and only an exact-match assertion catches that.
 	want := []string{
 		"--angle=false", "--cuda=false", "--tensorrt=false",
 		"--fp16=false", "--clahe=false",
@@ -424,9 +425,9 @@ func TestEnsureModelsPassesDownloadModelsFlag(t *testing.T) {
 }
 
 func TestEnsureModelsReturnsOcrErrorOnNonZeroExit(t *testing.T) {
-	// A v0.2.0 binary has no --download-models flag and exits non-zero with a
-	// usage error; callers must get a typed *OcrError carrying that stderr,
-	// not a bare exec error.
+	// A pre-v0.3.0 binary has no --download-models flag and exits non-zero
+	// with a usage error; callers must get a typed *OcrError carrying that
+	// stderr, not a bare exec error.
 	t.Setenv("ARBOOCR_TEST_HELPER", "1")
 	t.Setenv("ARBOOCR_TEST_DOWNLOAD_FAILS", "1")
 

@@ -45,12 +45,13 @@ type Config struct {
 	// noticeably larger and most callers only want line text.
 	WordBoxes bool
 
-	// Model auto-download passthroughs. These need the arboOCR release that
-	// adds model auto-download — installer.EnsureInstalled still pins
-	// v0.2.0, which predates it and exits 1 on an unknown option. Both are
-	// therefore strictly opt-in: at their zero value flagsFromConfig emits
-	// nothing at all, so a caller who never touches them builds the exact
-	// same argv as before and keeps working against the pinned binary.
+	// Model auto-download passthroughs, live against the pinned binary:
+	// installer.EnsureInstalled pins arboOCR v0.3.0, the release that added
+	// the feature. Both stay strictly opt-in anyway: at their zero value
+	// flagsFromConfig emits nothing at all, so a caller who never touches
+	// them builds the exact same argv as before, which is what keeps a
+	// Config.BinPath pointed at a pre-v0.3.0 binary working — cxxopts exits 1
+	// on an unknown option.
 	//
 	// NoDownload makes the binary fail instead of fetching a missing model —
 	// the flag form of the ARBOOCR_OFFLINE=1 environment variable, useful for
@@ -161,11 +162,11 @@ func (e *Engine) Recognize(imagePath string) (*PageResult, error) {
 // DetModelPath/RecModelPath is never substituted by a download, and a file
 // already present in ModelsDir wins without touching the network).
 //
-// Requires the arboOCR release that adds model auto-download.
-// installer.EnsureInstalled still pins v0.2.0, which has no
-// --download-models flag and will exit non-zero with a usage error — so
-// until that pin is bumped, this only works against a newer binary supplied
-// via Config.BinPath.
+// Works out of the box against the binary installer.EnsureInstalled
+// downloads, which pins arboOCR v0.3.0 — the release that added
+// --download-models. A pre-v0.3.0 binary supplied via Config.BinPath has no
+// such flag and exits non-zero with a usage error, returned here as an
+// *OcrError carrying that stderr.
 func (e *Engine) EnsureModels() error {
 	args := append([]string{"--download-models"}, e.flagsFromConfig()...)
 
@@ -217,8 +218,9 @@ func (e *Engine) flagsFromConfig() []string {
 		{e.cfg.RecModelPath, "rec-model"},
 		{e.cfg.DictPath, "dict"},
 		{e.cfg.LogLevel, "log-level"},
-		// --models-url postdates v0.2.0; the empty-string rule above is
-		// exactly what keeps it off the argv for callers on the pinned binary.
+		// --models-url needs a v0.3.0-or-newer binary; the empty-string rule
+		// above is exactly what keeps it off the argv for callers who point
+		// Config.BinPath at an older one.
 		{e.cfg.ModelsURL, "models-url"},
 	}
 	for _, sf := range stringFlags {
@@ -251,10 +253,10 @@ func (e *Engine) flagsFromConfig() []string {
 	}
 
 	// --no-download follows the same only-when-true rule as --word-boxes, and
-	// for a stronger version of the same reason: it postdates v0.2.0
-	// entirely, so emitting "--no-download=false" would break every caller
-	// still on the pinned binary — including the ones who never asked for
-	// anything to do with downloads.
+	// for a stronger version of the same reason: it does not exist at all
+	// before v0.3.0, so emitting "--no-download=false" would break every
+	// caller pointing Config.BinPath at an older binary — including the ones
+	// who never asked for anything to do with downloads.
 	if e.cfg.NoDownload {
 		flags = append(flags, "--no-download=true")
 	}
