@@ -7,14 +7,15 @@ import (
 	arboocr "github.com/ARBO-TEAM/arbo-ocr-go"
 )
 
-// Example shows the typical Recognize workflow: construct an Engine
-// pointing at a models directory, run it on an image, and read the
-// results. It's compiled (so it stays valid against the real API) but not
-// executed by `go test` — it downloads a real binary and needs a real
-// image/models directory, neither of which belong in a unit test.
+// Example shows the typical Recognize workflow: construct an Engine, run it
+// on an image, and read the results. Every Config field is optional — the
+// binary is downloaded by installer.EnsureInstalled and the models by the
+// binary itself. It's compiled (so it stays valid against the real API) but
+// not executed by `go test` — it downloads a real binary and needs a real
+// image, neither of which belongs in a unit test.
 func Example() {
 	engine, err := arboocr.NewEngine(arboocr.Config{
-		ModelsDir: "/path/to/models",
+		// ModelsDir:   "/path/to/models", // optional — a populated dir wins over downloading
 		// BinPath:     "/custom/path/to/arboocr_demo", // optional override
 		// ModelType:   "small", // tiny/small/medium — default small
 		// UseAngleCls: true,
@@ -36,15 +37,11 @@ func Example() {
 }
 
 // ExampleEngine_EnsureModels shows prefetching models so the first Recognize
-// doesn't pay for the download — e.g. from a Docker build step. Like Example
-// above it's compiled but not executed.
-//
-// This needs the arboOCR release that adds model auto-download; the version
-// installer.EnsureInstalled currently pins predates it, so BinPath has to
-// point at a newer binary until that pin is bumped.
+// doesn't pay for the download — e.g. from a Docker build step, alongside
+// installer.EnsureInstalled, which bakes in the binary but not the weights.
+// Like Example above it's compiled but not executed.
 func ExampleEngine_EnsureModels() {
 	engine, err := arboocr.NewEngine(arboocr.Config{
-		BinPath:   "/path/to/newer/arboocr_demo",
 		ModelType: "small",
 		// NoDownload: true,                              // fail rather than fetch
 		// ModelsURL:  "https://mirror.internal/models/", // fetch from an internal mirror
