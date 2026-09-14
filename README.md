@@ -11,7 +11,7 @@ go get github.com/ARBO-TEAM/arbo-ocr-go
 
 `NewEngine` downloads the matching arboOCR release binary (Windows or Linux,
 auto-detected) the first time it's used — see "How it works" below. The pinned
-release is [`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.3.0),
+release is [`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0),
 and this auto-download is live and verified working end to end — no manual
 binary step needed. If it fails anyway (offline, unsupported OS), download a
 release manually from the
@@ -27,7 +27,7 @@ to switch the download off entirely.
 
 ## Models
 
-arboOCR doesn't bundle OCR models in the release archive — the pinned `v0.3.0`
+arboOCR doesn't bundle OCR models in the release archive — the pinned `v0.4.0`
 binary downloads the ones it needs on first run instead, verifies each against
 a built-in SHA-256, and caches them (see
 [Model cache directory](#model-cache-directory)). That makes
@@ -67,7 +67,7 @@ to bring your own instead, pick whichever applies:
 ### Automatic download
 
 Live as of arboOCR
-[`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.3.0), the release
+[`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.3.0) and still live in `v0.4.0`, the release
 `installer.EnsureInstalled` pins — so this works out of the box, with no
 `Config.BinPath` of your own. The binary fetches missing models itself and
 verifies them by SHA-256, which is what makes `ModelsDir` optional. Its
@@ -126,7 +126,7 @@ error, since the flag doesn't exist there.
 
 `Recognize` and `EnsureModels` run `arboocr_demo` as a child process, so it
 inherits the parent's environment. These need no `Config` field, and are read
-by the pinned `v0.3.0` binary directly:
+by the pinned `v0.4.0` binary directly:
 
 | Variable | Effect |
 |---|---|
@@ -269,7 +269,7 @@ weights — pair it with `Engine.EnsureModels()` in the same step (see
 nothing left to fetch.
 
 Like the PHP package, OCR models are never bundled in the release archive —
-but the pinned `v0.3.0` binary fetches them itself on first use, SHA-256
+but the pinned `v0.4.0` binary fetches them itself on first use, SHA-256
 verified and cached, so there's no manual model step either.
 `Config.ModelsDir`, `Config.NoDownload` and `Config.ModelsURL` are how you
 override that: a populated models dir wins over any download, `NoDownload`
