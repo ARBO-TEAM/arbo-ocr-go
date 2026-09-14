@@ -3,6 +3,7 @@ package arboocr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,52 @@ func runFakeArboocrDemo() {
 		os.Exit(0)
 	}
 
+	// --images-from is batch mode: one process over a newline-delimited list
+	// file, one JSON array on stdout in list order — which is what lets the
+	// tests below assert positional matching by echoing each path back as its
+	// line's text.
+	if listPath := argValue("--images-from"); listPath != "" {
+		// What a bad flag actually does: exit 1 with no JSON on stdout. The
+		// engine must not confuse this with the ordinary "a page came back
+		// empty" exit 1, which does carry the array.
+		if os.Getenv("ARBOOCR_TEST_BATCH_USAGE") == "1" {
+			os.Stderr.WriteString("Option '--images-from' does not exist\n")
+			os.Exit(1)
+		}
+		raw, err := os.ReadFile(listPath)
+		if err != nil {
+			os.Stderr.WriteString("cannot read image list\n")
+			os.Exit(2)
+		}
+		var paths []string
+		for _, l := range strings.Split(string(raw), "\n") {
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+				paths = append(paths, l)
+			}
+		}
+		if os.Getenv("ARBOOCR_TEST_BATCH_SHORT") == "1" && len(paths) > 0 {
+			paths = paths[:len(paths)-1]
+		}
+		var b strings.Builder
+		b.WriteString("[")
+		for i, p := range paths {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, `{"backend":"cpu","image":%q,"elapsedMs":12.5,"lines":[{"text":%q,"score":0.9,"detScore":0.8,"polygon":[{"x":1,"y":2}]}]}`,
+				filepath.Base(p), p)
+		}
+		b.WriteString("]\n")
+		os.Stdout.WriteString(b.String())
+
+		// A batch exits 1 when *any* image came back empty — an ordinary
+		// outcome, still carrying the JSON the caller asked for.
+		if os.Getenv("ARBOOCR_TEST_BATCH_EXIT1") == "1" {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	image := ""
 	for i, a := range os.Args {
 		if a == "--image" && i+1 < len(os.Args) {
@@ -94,6 +141,16 @@ func hasArg(name string) bool {
 		}
 	}
 	return false
+}
+
+// argValue returns the value following a bare name in argv, or "" when absent.
+func argValue(name string) string {
+	for i, a := range os.Args {
+		if a == name && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+	}
+	return ""
 }
 
 func TestRecognizeParsesSuccessfulJSON(t *testing.T) {
@@ -474,6 +531,131 @@ func TestTuningFlagsEmittedWhenSet(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("flags missing %q (got: %s)", want, joined)
 		}
+	}
+}
+
+func TestRecognizeBatchParsesArrayInInputOrder(t *testing.T) {
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	eng, err := NewEngine(Config{BinPath: os.Args[0]})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// The fake echoes each list entry back as its line's text, which is the
+	// only way to prove the result at index i really belongs to input i — the
+	// whole point of the count check in RecognizeBatch.
+	in := []string{"a.png", "b.png", "c.png"}
+	results, err := eng.RecognizeBatch(in)
+	if err != nil {
+		t.Fatalf("RecognizeBatch: %v", err)
+	}
+	if len(results) != len(in) {
+		t.Fatalf("len(results) = %d, want %d", len(results), len(in))
+	}
+	for i, want := range in {
+		if len(results[i].Lines) != 1 {
+			t.Fatalf("results[%d].Lines = %+v, want one line", i, results[i].Lines)
+		}
+		if got := results[i].Lines[0].Text; got != want {
+			t.Errorf("results[%d] text = %q, want %q — results are not in input order", i, got, want)
+		}
+		if results[i].ElapsedMs != 12.5 {
+			t.Errorf("results[%d].ElapsedMs = %v, want 12.5", i, results[i].ElapsedMs)
+		}
+	}
+}
+
+func TestRecognizeBatchEmptyInputMakesNoProcess(t *testing.T) {
+	// No helper env and no BinPath on purpose: if this reached exec.Command it
+	// would fail to start rather than return an empty, successful result.
+	eng := &Engine{cfg: Config{}}
+	results, err := eng.RecognizeBatch(nil)
+	if err != nil {
+		t.Fatalf("RecognizeBatch(nil): %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("len(results) = %d, want 0", len(results))
+	}
+}
+
+func TestRecognizeBatchRejectsUnlistablePath(t *testing.T) {
+	// A path the newline-delimited list format cannot carry would be silently
+	// dropped by the binary and shift every later result onto the wrong input.
+	eng := &Engine{cfg: Config{}}
+	for name, bad := range map[string]string{
+		"empty":        "",
+		"newline":      "a\nb.png",
+		"carriage":     "a\rb.png",
+		"comment-like": "#not-an-image.png",
+		"indented #":   "  #not-an-image.png",
+	} {
+		if _, err := eng.RecognizeBatch([]string{"ok.png", bad}); err == nil {
+			t.Errorf("%s: want error, got nil", name)
+		}
+	}
+}
+
+func TestRecognizeBatchToleratesExit1WithJSON(t *testing.T) {
+	// A batch exits 1 when any image came back empty. That is an ordinary
+	// outcome for a receipt with a blank region, not a failure, and the JSON
+	// the caller asked for is still on stdout.
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	t.Setenv("ARBOOCR_TEST_BATCH_EXIT1", "1")
+	eng, err := NewEngine(Config{BinPath: os.Args[0]})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	results, err := eng.RecognizeBatch([]string{"a.png"})
+	if err != nil {
+		t.Fatalf("RecognizeBatch: %v", err)
+	}
+	if len(results) != 1 || results[0].Lines[0].Text != "a.png" {
+		t.Errorf("results = %+v, want one result for a.png", results)
+	}
+}
+
+func TestRecognizeBatchUsageErrorIsAnError(t *testing.T) {
+	// Exit 1 is overloaded: "a page had no text" (JSON present) and "you
+	// passed a bad flag" (no JSON) share it. Only the JSON-bearing form may be
+	// tolerated.
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	t.Setenv("ARBOOCR_TEST_BATCH_USAGE", "1")
+	eng, err := NewEngine(Config{BinPath: os.Args[0]})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	_, err = eng.RecognizeBatch([]string{"a.png"})
+	if err == nil {
+		t.Fatal("RecognizeBatch: want error, got nil")
+	}
+	var ocrErr *OcrError
+	if !errors.As(err, &ocrErr) {
+		t.Fatalf("error type = %T, want *OcrError (err: %v)", err, err)
+	}
+	if ocrErr.ExitCode != 1 {
+		t.Errorf("ExitCode = %d, want 1", ocrErr.ExitCode)
+	}
+}
+
+func TestRecognizeBatchCountMismatchIsFatal(t *testing.T) {
+	// Results are matched by position, so fewer results than inputs would
+	// silently attribute text to the wrong file. Refusing beats returning a
+	// shifted list.
+	t.Setenv("ARBOOCR_TEST_HELPER", "1")
+	t.Setenv("ARBOOCR_TEST_BATCH_SHORT", "1")
+	eng, err := NewEngine(Config{BinPath: os.Args[0]})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	_, err = eng.RecognizeBatch([]string{"a.png", "b.png", "c.png"})
+	if err == nil {
+		t.Fatal("RecognizeBatch: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "by position") {
+		t.Errorf("Error() = %q, want it to explain the positional mismatch", err.Error())
 	}
 }
 
