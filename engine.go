@@ -46,8 +46,9 @@ type Config struct {
 	WordBoxes bool
 
 	// Model auto-download passthroughs, live against the pinned binary:
-	// installer.EnsureInstalled pins arboOCR v0.3.0, the release that added
-	// the feature. Both stay strictly opt-in anyway: at their zero value
+	// installer.EnsureInstalled pins arboOCR v0.4.0, which includes the v0.3.0
+	// release that added the feature. Both stay strictly opt-in anyway: at
+	// their zero value
 	// flagsFromConfig emits nothing at all, so a caller who never touches
 	// them builds the exact same argv as before, which is what keeps a
 	// Config.BinPath pointed at a pre-v0.3.0 binary working — cxxopts exits 1
@@ -149,6 +150,126 @@ func (e *Engine) Recognize(imagePath string) (*PageResult, error) {
 	return &result, nil
 }
 
+// RecognizeBatch runs one arboocr_demo process over many images
+// (`--images-from <list> --json`) and returns one PageResult per input, in
+// input order.
+//
+// The saving is the process start and model load, which a one-shot Recognize
+// pays in full on every call — the recognizer/detector init dominates a short
+// page. Measured on 40 SROIE receipts at ModelType "tiny" it is ~131ms of a
+// ~447ms wall per image (see the wrapper benchmark in RESULTS.md).
+//
+// Results are matched to inputs by position: the binary's "image" field
+// carries only a basename, so two same-named files in different directories
+// would be indistinguishable. Positional matching is only sound when the
+// counts agree, so a mismatch is returned as an error rather than a shifted
+// list.
+//
+// An empty PageResult.Lines is a normal, successful result here exactly as in
+// Recognize. So is the process exit status: a batch exits 1 when *any* image
+// came back empty, which is tolerated as long as stdout still holds the JSON
+// array.
+func (e *Engine) RecognizeBatch(imagePaths []string) ([]PageResult, error) {
+	if len(imagePaths) == 0 {
+		return nil, nil
+	}
+
+	// The list file is newline-delimited and the binary treats blank lines and
+	// '#' lines as comments, so a path in either shape would be silently
+	// dropped and shift every later result onto the wrong input. Rejecting
+	// beats mis-attributing text to the wrong file.
+	for i, p := range imagePaths {
+		switch {
+		case p == "":
+			return nil, &OcrError{
+				Message: fmt.Sprintf("RecognizeBatch: imagePaths[%d] is empty", i),
+			}
+		case strings.ContainsAny(p, "\r\n"):
+			return nil, &OcrError{
+				Message: fmt.Sprintf("RecognizeBatch: imagePaths[%d] contains a newline, which the image list format cannot represent: %q", i, p),
+			}
+		case strings.HasPrefix(strings.TrimLeft(p, " \t"), "#"):
+			return nil, &OcrError{
+				Message: fmt.Sprintf("RecognizeBatch: imagePaths[%d] starts with '#', which arboocr_demo reads as a comment and would skip: %q", i, p),
+			}
+		}
+	}
+
+	listFile, err := os.CreateTemp("", "arbo-ocr-go-*.txt")
+	if err != nil {
+		return nil, &OcrError{Message: fmt.Sprintf("could not create image list: %v", err)}
+	}
+	listPath := listFile.Name()
+	defer os.Remove(listPath)
+
+	if _, err := listFile.WriteString(strings.Join(imagePaths, "\n") + "\n"); err != nil {
+		listFile.Close()
+		return nil, &OcrError{Message: fmt.Sprintf("could not write image list: %v", err)}
+	}
+	if err := listFile.Close(); err != nil {
+		return nil, &OcrError{Message: fmt.Sprintf("could not write image list: %v", err)}
+	}
+
+	args := append([]string{"--images-from", listPath, "--json"}, e.flagsFromConfig()...)
+	cmd := exec.Command(e.binPath, args...)
+
+	// Same buffered-capture rationale as Recognize: cmd.Stdout/cmd.Stderr as
+	// plain io.Writer values let os/exec drain both concurrently, so a full
+	// stderr pipe can't deadlock the child against the parent.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+	trimmed := strings.TrimSpace(stdout.String())
+
+	if runErr != nil {
+		// The binary overloads exit 1: "a page had no text" and "you passed a
+		// bad flag" share it. Only the first leaves the JSON array on stdout,
+		// so requiring that payload keeps a usage error an error.
+		ok := false
+		exitErr, isExitErr := runErr.(*exec.ExitError)
+		if isExitErr && exitErr.ExitCode() == 1 {
+			ok = strings.HasPrefix(trimmed, "[")
+		}
+		if !ok {
+			if isExitErr {
+				exitCode := exitErr.ExitCode()
+				return nil, &OcrError{
+					Message:  fmt.Sprintf("arboocr_demo exited with code %d", exitCode),
+					ExitCode: exitCode,
+					Stderr:   stderr.String(),
+				}
+			}
+			return nil, &OcrError{
+				Message: fmt.Sprintf("could not start process: %v", runErr),
+			}
+		}
+	}
+
+	var results []PageResult
+	if jsonErr := json.Unmarshal([]byte(trimmed), &results); jsonErr != nil {
+		raw := trimmed
+		if len(raw) > 500 {
+			raw = raw[:500]
+		}
+		return nil, &OcrError{
+			Message: fmt.Sprintf("arboocr_demo --images-from produced unparseable output: %s", raw),
+		}
+	}
+
+	if len(results) != len(imagePaths) {
+		return nil, &OcrError{
+			Message: fmt.Sprintf(
+				"arboocr_demo returned %d results for %d images; cannot match results to inputs by position",
+				len(results), len(imagePaths),
+			),
+		}
+	}
+
+	return results, nil
+}
+
 // EnsureModels runs `arboocr_demo --download-models` (plus the same
 // Config-derived flags Recognize passes) to fetch the models for this
 // Engine's OcrVersion/ModelType into arboOCR's model cache, then returns —
@@ -163,10 +284,10 @@ func (e *Engine) Recognize(imagePath string) (*PageResult, error) {
 // already present in ModelsDir wins without touching the network).
 //
 // Works out of the box against the binary installer.EnsureInstalled
-// downloads, which pins arboOCR v0.3.0 — the release that added
-// --download-models. A pre-v0.3.0 binary supplied via Config.BinPath has no
-// such flag and exits non-zero with a usage error, returned here as an
-// *OcrError carrying that stderr.
+// downloads, which pins arboOCR v0.4.0 — a release that includes the v0.3.0
+// version that added --download-models. A pre-v0.3.0 binary supplied via
+// Config.BinPath has no such flag and exits non-zero with a usage error,
+// returned here as an *OcrError carrying that stderr.
 func (e *Engine) EnsureModels() error {
 	args := append([]string{"--download-models"}, e.flagsFromConfig()...)
 

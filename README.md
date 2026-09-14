@@ -196,11 +196,50 @@ when the process itself fails to start, exits non-zero, or produces
 unparseable output.
 
 `UseCuda` / `UseTensorrt` ask for a GPU execution provider, and
-`result.Backend` reports which one actually ran. Both need the pinned
-`v0.3.0`: release archives before it shipped without the
+`result.Backend` reports which one actually ran. Both need arboOCR `v0.3.0`
+or newer: release archives before it shipped without the
 `onnxruntime_providers_shared` library, so `--cuda`/`--tensorrt` could not
 load a GPU provider from a release archive at all. A working CUDA/TensorRT
 install on the host is still your side of the deal.
+
+### Many images in one process — `RecognizeBatch`
+
+`Recognize` starts a fresh `arboocr_demo` for every image, and the process
+start plus model load dominates a short page. `RecognizeBatch` runs **one**
+process over a whole list instead:
+
+```go
+pages, err := engine.RecognizeBatch([]string{
+	"/scans/001.jpg",
+	"/scans/002.jpg",
+	"/scans/003.jpg",
+})
+if err != nil {
+	log.Fatal(err)
+}
+for i, page := range pages {
+	fmt.Printf("%s: %d lines\n", page.Image, len(page.Lines))
+	_ = i // pages[i] belongs to the i-th path passed in
+}
+```
+
+On 40 SROIE receipts at `ModelType: "tiny"` the process start is ~131ms of a
+~447ms wall per image, so batching removes about 30% of wall time; the saving
+shrinks as the recognizer grows (roughly 18% at `small`, 10% at `medium`),
+because the model load it removes is a decreasing share of the total.
+
+Results are matched to inputs **by position**, and the count must agree —
+`arboocr_demo` reports only an image's basename, so two same-named files in
+different directories would be indistinguishable. A mismatch is returned as
+an error rather than a shifted list. For the same reason a path that cannot
+survive the newline-delimited list format (empty, containing a newline, or
+starting with `#`, which the binary reads as a comment and would skip) is
+rejected before anything runs.
+
+A batch exits `1` when *any* image came back with no text. That is an
+ordinary outcome, not a failure, and is tolerated as long as the JSON array
+is still on stdout — a usage error (unknown flag) exits `1` too but leaves
+stdout empty, and that one is returned as an `*OcrError`.
 
 ## Quick example (tiny model, fastest)
 
