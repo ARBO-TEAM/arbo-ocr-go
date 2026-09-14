@@ -237,12 +237,15 @@ for i, page := range pages {
 }
 ```
 
-On 5 SROIE receipts the saving measured 13.0% at `tiny`, 28.5% at `small`,
-13.6% at `medium` (same text on every image), which is `bench_batch_go.py` in
-the internal `compare/` harness. That share is `(process start + model load) /
-total`, so it moves with the model size and the number of images — it is not a
-fixed percentage. A batch is worth it whenever the list is longer than one and
-the images are individually small.
+On 5 SROIE receipts batching saved 35–44% of wall time at `tiny`, 16–29% at
+`small` and 11–17% at `medium` (same text on every image), measured by
+`bench_batch_all.py` in the internal `compare/` harness. Those are ranges across
+this language and its four siblings, not point values, and deliberately so: the
+saving is `(process start + model load) / total`, which `arboocr_demo` owns, and
+the raw binary with no wrapper at all measures 31% / 19% / 10%. That share moves
+with the model size and the number of images, so it is not a fixed percentage. A
+batch is worth it whenever the list is longer than one and the images are
+individually small.
 
 Results are matched to inputs **by position**, and the count must agree —
 `arboocr_demo` reports only an image's basename, so two same-named files in
