@@ -11,7 +11,7 @@ go get github.com/ARBO-TEAM/arbo-ocr-go
 
 `NewEngine` downloads the matching arboOCR release binary (Windows or Linux,
 auto-detected) the first time it's used — see "How it works" below. The pinned
-release is [`v0.3.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0),
+release is [`v0.4.0`](https://github.com/wafik/ArboOCR/releases/tag/v0.4.0),
 and this auto-download is live and verified working end to end — no manual
 binary step needed. If it fails anyway (offline, unsupported OS), download a
 release manually from the
@@ -79,7 +79,7 @@ precedence, per file:
 2. Otherwise a file already sitting in `ModelsDir` wins — zero network.
 3. Only then is the file downloaded into the model cache and verified.
 
-Two `Config` fields drive it. Both are opt-in, and that still matters: left at
+`Config` fields drive it. All are opt-in, and that still matters: left at
 their zero value they emit no CLI flag at all, which is what keeps a
 `Config.BinPath` pointed at a pre-`v0.3.0` binary working (an unknown option
 makes it exit 1 with a usage error).
@@ -88,6 +88,20 @@ makes it exit 1 with a usage error).
 |---|---|---|
 | `NoDownload bool` | `--no-download` | Never fetch a missing model — fail instead. For runs that must not silently reach the network. |
 | `ModelsURL string` | `--models-url <url>` | Directory URL to fetch missing models from, e.g. an internal mirror, instead of the default `https://github.com/ARBO-TEAM/arbo-ocr-models/releases/download/models-v1/`. |
+| `MinDetBoxArea *float64` | `--min-det-box-area <float>` | **v0.4.0+** Drop det boxes at or below this area in detector-input pixels. `0` disables the cut; `nil` (unset) leaves the binary's default `20`. |
+| `SpaceRecovery bool` | `--space-recovery` | **v0.4.0+** Emit the inter-word spaces a greedy CTC decode swallows. |
+| `EnableCPUMemArena bool` | `--enable-cpu-mem-arena` | **v0.4.0+** Leave ORT's CPU memory arena on: faster, higher RSS. |
+
+The three **v0.4.0+** rows require arboOCR `v0.4.0` or newer — the pinned
+release, and the first with these options. They are also the strictest case of
+the opt-in rule above: each is emitted **only** when you set it, so a
+`Config.BinPath` pointed at an older binary never sees them. `MinDetBoxArea` is
+a `*float64` rather than a `float64` precisely so that `0` — a real setting
+that disables the cut — stays distinguishable from unset; set any non-nil
+value, `0` included, and it reaches argv verbatim. The two bools emit a single
+`--flag=true` token for an explicit `true` and **nothing at all** for `false`
+or unset, since `false` is the binary's own default and `--flag=false` is the
+token a pre-`v0.4.0` binary would reject.
 
 `Engine.EnsureModels()` prefetches the models for the configured
 `OcrVersion`/`ModelType` so the first `Recognize` doesn't pay for the
@@ -326,24 +340,44 @@ had to explicitly work around.
 
 ## Benchmark
 
-`arbo-ocr-go` was compared against arbo-ocr-php and arbo-ocr-rust on the
-same 5-image SROIE smoke set — all three call the identical `arboocr_demo`
-binary, so accuracy is the same across all three; this measures wrapper
-overhead only (subprocess spawn − arboocr_demo's own reported time):
+`arbo-ocr-go` was benchmarked against the other five arbo wrapper arms —
+`arbo-cpp`, `arbo-php`, `arbo-rust`, `arbo-python`, `arbo-js` — on a
+40-image SROIE sample. All six drive the **same pinned `arboocr_demo`
+v0.4.0 binary**, so accuracy is identical across the arms by construction
+(84.6 / 86.1 / 86.3% at tiny/small/medium) and the only thing left to
+compare is each wrapper's own per-call cost:
 
-| Size | arbo-php | arbo-go | arbo-rust |
-|--------|----------:|---------:|-----------:|
-| tiny | 193 ms | 137 ms | 131 ms |
-| small | 231 ms | 171 ms | 172 ms |
-| medium | 303 ms | 248 ms | 249 ms |
+| Arm | tiny | small | medium |
+|-----|-----:|------:|-------:|
+| arbo-cpp (raw binary, no wrapper) | 322 / 179 | 662 / 478 | 1825 / 1578 |
+| arbo-php | 358 / 169 | 718 / 487 | 1875 / 1569 |
+| arbo-go | 302 / 167 | 753 / 544 | 1877 / 1619 |
+| arbo-rust | 300 / 167 | 657 / 481 | 1866 / 1613 |
+| arbo-python | 381 / 171 | 744 / 492 | 2006 / 1663 |
+| arbo-js | 427 / 220 | 744 / 515 | 1948 / 1645 |
 
-Go and Rust overhead is essentially tied — both are compiled binaries
-paying only process-spawn cost, no interpreter startup. PHP runs ~55–65ms
-higher (`php.exe` interpreter startup on top of `proc_open`). Same accuracy
-across all three; all three match or beat a PP-OCRv6-based Node/Bun
-reference implementation on this sample at every size. Full methodology in
-the "wrapper benchmark" section of the internal `compare/RESULTS.md`
-companion doc (not published in this repo).
+Average wall ms / engine ms per image; `engine ms` is `arboocr_demo`'s own
+reported inference time, and the `arbo-cpp` row is the raw binary with no
+wrapper process in between — the floor the wrappers sit on. What the table
+does *not* support is a ranking of the wrappers: on this run the raw-binary
+row is slower than both compiled wrappers at `tiny`, and the `arbo-go` arm
+picked up a slow tail on a few `small` images (`engine ms` 544 for it
+against 478–515 for the other five arms, on the same binary and the same
+images). An earlier round of this comparison did rank the wrappers — PHP
+~55–65 ms above Go/Rust — but each package then installed its own arboOCR
+release, so that spread was engine-version drift between arms, not wrapper
+overhead. Every arbo arm here still beats the `ppu-paddle-ocr` Node/Bun
+reference on both similarity and wall time at every size (82.8 / 83.5 /
+84.7% at 581 / 944 / 2040 ms).
+
+Absolute milliseconds come from one session on one machine; thermal state
+and background load move every row, so these figures are comparable within
+this table only — never against another session's numbers.
+
+Measured by the internal `compare/` harness (`bench_wrappers.py`, one
+process per image, each calling the pinned binary once) in its 2026-09-14
+run; raw results in `out/bench_wrappers_n40.json`. The harness and its
+output are not published in this repo.
 
 ## License
 

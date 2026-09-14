@@ -63,6 +63,32 @@ type Config struct {
 	// the default upstream location — point it at an internal mirror. Same
 	// knob as the ARBOOCR_MODELS_URL environment variable.
 	ModelsURL string
+
+	// The three knobs below are new in arboOCR v0.4.0. Each is emitted only
+	// when the caller explicitly opts in, the same rule WordBoxes/NoDownload
+	// follow and for the same load-bearing reason: cxxopts exits 1 with a
+	// usage error on an unknown option, so an unconditional
+	// "--min-det-box-area 20"/"--space-recovery=false" would break every
+	// caller who points Config.BinPath at an older binary.
+	//
+	// MinDetBoxArea drops det boxes at or below this area in detector-input
+	// pixels. It is a pointer, not a plain float64, because 0 is a meaningful
+	// value here — it disables the cut ("0 disables; ppu default 20") — so a
+	// float64's zero value could not distinguish "disable the filter" from
+	// "unset". nil means unset (emit nothing, keep the binary's default); any
+	// non-nil value, 0 included, is an explicit opt-in emitted verbatim.
+	MinDetBoxArea *float64
+
+	// SpaceRecovery emits the inter-word spaces a greedy CTC decode swallows.
+	// Only an explicit true reaches argv: false is the binary's own default,
+	// so false and unset are indistinguishable, and a pre-v0.4.0 binary has no
+	// such option at all.
+	SpaceRecovery bool
+
+	// EnableCPUMemArena leaves ORT's CPU memory arena on: faster, higher RSS.
+	// Opt-in only, exactly like SpaceRecovery — true emits
+	// "--enable-cpu-mem-arena=true", false and unset emit nothing.
+	EnableCPUMemArena bool
 }
 
 // Engine runs the prebuilt arboocr_demo binary via os/exec and parses its
@@ -325,8 +351,10 @@ func (e *Engine) EnsureModels() error {
 // only when non-zero, so an unset field leaves arboocr_demo's own default
 // in place. The five original bool fields always emit
 // "--flag-name", "true"/"false" since Config has no way to represent
-// "unset" for a bool, and their CLI defaults are known-stable; WordBoxes
-// and NoDownload are the exceptions and emit only when true (see below).
+// "unset" for a bool, and their CLI defaults are known-stable; WordBoxes,
+// NoDownload, SpaceRecovery and EnableCPUMemArena are the exceptions and
+// emit only when true (see below), and MinDetBoxArea is the numeric
+// exception: pointer-nil, not zero, is what marks it unset.
 func (e *Engine) flagsFromConfig() []string {
 	var flags []string
 
@@ -368,6 +396,17 @@ func (e *Engine) flagsFromConfig() []string {
 		flags = append(flags, "--det-limit-side-len", strconv.Itoa(e.cfg.DetLimitSideLen))
 	}
 
+	// --min-det-box-area breaks the numeric rule above on purpose. The flag is
+	// new in arboOCR v0.4.0, so it must never be emitted for a caller who
+	// didn't ask for it (an unknown option makes cxxopts exit 1), and its
+	// "unset" test can't be "!= 0" either, because 0 is a real setting here —
+	// it disables the box-area cut. The pointer is what tells the two apart:
+	// nil = unset = emit nothing, non-nil = emit the value verbatim, 0
+	// included, so "--min-det-box-area 0" is expressible.
+	if e.cfg.MinDetBoxArea != nil {
+		flags = append(flags, "--min-det-box-area", strconv.FormatFloat(*e.cfg.MinDetBoxArea, 'g', -1, 64))
+	}
+
 	// --word-boxes is emitted only when true, unlike the always-emitted bool
 	// flags below: it is new in arboOCR v0.2.0, and unconditionally passing
 	// "--word-boxes=false" would make an explicitly-set Config.BinPath
@@ -383,6 +422,19 @@ func (e *Engine) flagsFromConfig() []string {
 	// who never asked for anything to do with downloads.
 	if e.cfg.NoDownload {
 		flags = append(flags, "--no-download=true")
+	}
+
+	// Same opt-in-only rule for the two v0.4.0 bools. false is the binary's
+	// own default, so "--space-recovery=false" carries no information the
+	// absent flag doesn't — and it is exactly the token a pre-v0.4.0 binary
+	// would reject with a usage error. Only an explicit true is emitted, as a
+	// single "--flag=true" token (cxxopts binds a bool's value only via "=",
+	// same as the --word-boxes case above).
+	if e.cfg.SpaceRecovery {
+		flags = append(flags, "--space-recovery=true")
+	}
+	if e.cfg.EnableCPUMemArena {
+		flags = append(flags, "--enable-cpu-mem-arena=true")
 	}
 
 	boolFlags := []struct {
