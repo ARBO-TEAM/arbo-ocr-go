@@ -31,14 +31,20 @@ const repo = "wafik/ArboOCR"
 // Bumping this constant also changes the cache directory (see
 // EnsureInstalled) — that is deliberate, not incidental.
 //
-// v0.3.0 is the release that added model auto-download, so the binary this
-// downloads understands --no-download / --models-url / --download-models and
-// the ARBOOCR_OFFLINE / ARBOOCR_CACHE_DIR / ARBOOCR_MODELS_URL environment
-// variables: Config.NoDownload, Config.ModelsURL and Engine.EnsureModels
-// (engine.go) work out of the box against it. It is also the first release to
-// ship onnxruntime_providers_shared, without which --cuda/--tensorrt could
-// not load a GPU execution provider from a release archive at all.
-const pinnedVersion = "v0.3.0"
+// v0.3.0 added model auto-download, so the binary this downloads understands
+// --no-download / --models-url / --download-models and the ARBOOCR_OFFLINE /
+// ARBOOCR_CACHE_DIR / ARBOOCR_MODELS_URL environment variables:
+// Config.NoDownload, Config.ModelsURL and Engine.EnsureModels (engine.go)
+// work out of the box against it. It is also the first release to ship
+// onnxruntime_providers_shared, without which --cuda/--tensorrt could not
+// load a GPU execution provider from a release archive at all.
+//
+// v0.4.0 is the current pin: it adds ppu-style recognition batching plus
+// --min-det-box-area, --space-recovery and --enable-cpu-mem-arena, and it is
+// the first release whose default decode no longer needs the space-recovery
+// workaround. Everything v0.3.0 provided is still present, so no flag this
+// package emits changed meaning.
+const pinnedVersion = "v0.4.0"
 
 // downloadTimeout bounds how long EnsureInstalled waits for the release
 // asset to download.
