@@ -378,9 +378,30 @@ func TestZeroValueTuningFlagsAreOmitted(t *testing.T) {
 	for _, flag := range []string{
 		"--min-confidence", "--rec-batch-num", "--det-limit-side-len",
 		"--word-boxes", "--log-level",
+		"--min-det-box-area", "--space-recovery", "--enable-cpu-mem-arena",
 	} {
 		if strings.Contains(joined, flag) {
 			t.Errorf("zero-value Config emitted %s (flags: %s)", flag, joined)
+		}
+	}
+
+	// The other direction for the v0.4.0 fields, spelled out: an explicit
+	// false on either bool must be just as invisible as an unset one. false
+	// is the binary's own default, so "--space-recovery=false" adds nothing
+	// but is precisely the token a pre-v0.4.0 binary exits 1 on — and nil
+	// MinDetBoxArea is the only way to say "leave the cut at the binary's
+	// default 20".
+	eng = &Engine{cfg: Config{
+		MinDetBoxArea:     nil,
+		SpaceRecovery:     false,
+		EnableCPUMemArena: false,
+	}}
+	joined = strings.Join(eng.flagsFromConfig(), " ")
+	for _, flag := range []string{
+		"--min-det-box-area", "--space-recovery", "--enable-cpu-mem-arena",
+	} {
+		if strings.Contains(joined, flag) {
+			t.Errorf("explicit-false/unset v0.4.0 Config emitted %s (flags: %s)", flag, joined)
 		}
 	}
 }
@@ -511,12 +532,16 @@ func TestEnsureModelsReturnsOcrErrorOnNonZeroExit(t *testing.T) {
 }
 
 func TestTuningFlagsEmittedWhenSet(t *testing.T) {
+	minDetBoxArea := 20.0
 	eng := &Engine{cfg: Config{
-		MinConfidence:   0.75,
-		RecBatchNum:     12,
-		DetLimitSideLen: 1280,
-		LogLevel:        "warn",
-		WordBoxes:       true,
+		MinConfidence:     0.75,
+		RecBatchNum:       12,
+		DetLimitSideLen:   1280,
+		LogLevel:          "warn",
+		WordBoxes:         true,
+		MinDetBoxArea:     &minDetBoxArea,
+		SpaceRecovery:     true,
+		EnableCPUMemArena: true,
 	}}
 	flags := eng.flagsFromConfig()
 	joined := strings.Join(flags, " ")
@@ -527,10 +552,24 @@ func TestTuningFlagsEmittedWhenSet(t *testing.T) {
 		"--det-limit-side-len 1280",
 		"--log-level warn",
 		"--word-boxes=true",
+		"--min-det-box-area 20",
+		// Single-token form, same as --word-boxes: cxxopts binds a bool's
+		// value only via "=".
+		"--space-recovery=true",
+		"--enable-cpu-mem-arena=true",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("flags missing %q (got: %s)", want, joined)
 		}
+	}
+
+	// An explicit 0 is a setting, not an absence: it disables the box-area
+	// cut. This is the whole reason MinDetBoxArea is a *float64 — under a
+	// plain "!= 0" numeric rule the value could never reach the binary.
+	disabled := 0.0
+	eng = &Engine{cfg: Config{MinDetBoxArea: &disabled}}
+	if joined = strings.Join(eng.flagsFromConfig(), " "); !strings.Contains(joined, "--min-det-box-area 0") {
+		t.Errorf("MinDetBoxArea = 0 must emit %q (got: %s)", "--min-det-box-area 0", joined)
 	}
 }
 
