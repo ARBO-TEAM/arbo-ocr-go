@@ -156,8 +156,11 @@ func (e *Engine) Recognize(imagePath string) (*PageResult, error) {
 //
 // The saving is the process start and model load, which a one-shot Recognize
 // pays in full on every call — the recognizer/detector init dominates a short
-// page. Measured on 40 SROIE receipts at ModelType "tiny" it is ~131ms of a
-// ~447ms wall per image (see the wrapper benchmark in RESULTS.md).
+// page. Measured over 5 SROIE receipts it was 13.0% of wall time at ModelType
+// "tiny", 28.5% at "small" and 13.6% at "medium", with identical text on every
+// image (compare/bench_batch_go.py). That share is (process start + model
+// load) / total, so it varies with the model size and the list length rather
+// than being a fixed percentage.
 //
 // Results are matched to inputs by position: the binary's "image" field
 // carries only a basename, so two same-named files in different directories

@@ -223,10 +223,12 @@ for i, page := range pages {
 }
 ```
 
-On 40 SROIE receipts at `ModelType: "tiny"` the process start is ~131ms of a
-~447ms wall per image, so batching removes about 30% of wall time; the saving
-shrinks as the recognizer grows (roughly 18% at `small`, 10% at `medium`),
-because the model load it removes is a decreasing share of the total.
+On 5 SROIE receipts the saving measured 13.0% at `tiny`, 28.5% at `small`,
+13.6% at `medium` (same text on every image), which is `bench_batch_go.py` in
+the internal `compare/` harness. That share is `(process start + model load) /
+total`, so it moves with the model size and the number of images — it is not a
+fixed percentage. A batch is worth it whenever the list is longer than one and
+the images are individually small.
 
 Results are matched to inputs **by position**, and the count must agree —
 `arboocr_demo` reports only an image's basename, so two same-named files in
